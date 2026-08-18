@@ -54,21 +54,7 @@ omarchy bar set tdeckers.openhab refreshIntervalSec 30
 omarchy plugin remove tdeckers.openhab
 ```
 
-## Develop
-
-```bash
-git clone https://github.com/tdeckers/omarchy-openhab.git ~/git/omarchy-openhab
-ln -sfn ~/git/omarchy-openhab ~/.config/omarchy/plugins/tdeckers.openhab
-omarchy plugin validate ~/git/omarchy-openhab
-omarchy plugin enable tdeckers.openhab --section right
-```
-
-```bash
-python3 -m py_compile bin/openhab-api
-python3 tests/test_openhab_api.py
-```
-
-Saves under the plugin folder hot-reload in `omarchy-shell`.
+Working on the plugin itself is covered in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
