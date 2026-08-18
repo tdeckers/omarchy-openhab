@@ -70,6 +70,8 @@ Panel {
   }
 
   function refreshStates() {
+    if (statesProc.running)
+      return
     loadingStates = true
     runApi(statesProc, ["states"], "")
   }

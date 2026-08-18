@@ -51,6 +51,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(saved["items"]), 10)
         self.assertEqual(saved["items"][0], "i0")
 
+    def test_save_config_creates_private_file(self):
+        self.mod.save_config({"url": "https://oh.example", "items": [], "token": "secret-value"})
+        mode = self.cfg.stat().st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
     def test_config_get_never_emits_token(self):
         self.mod.save_config({"url": "https://oh.example", "items": ["Lamp"], "token": "secret-value"})
         with mock.patch.object(self.mod, "secret_lookup", return_value=""):
