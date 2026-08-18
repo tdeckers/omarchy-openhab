@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile helper
+        run: python3 -m py_compile bin/openhab-api
+      - name: Unit tests
+        run: python3 tests/test_openhab_api.py
+      - name: Manifest is JSON
+        run: python3 -m json.tool manifest.json >/dev/null
+      - name: Required plugin files exist
+        run: |
+          test -f BarWidget.qml
+          test -f Panel.qml
+          test -f Model.js
+          test -f LICENSE
+          test -x bin/openhab-api || chmod +x bin/openhab-api
