@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import importlib.util
 import json
 import sys
 import tempfile
@@ -12,7 +13,13 @@ API = ROOT / "bin" / "openhab-api"
 
 
 def load_api():
-    return SourceFileLoader("openhab_api", str(API)).load_module()
+    loader = SourceFileLoader("openhab_api", str(API))
+    spec = importlib.util.spec_from_loader("openhab_api", loader)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load {API}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class ApiTests(unittest.TestCase):

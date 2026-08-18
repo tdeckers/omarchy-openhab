@@ -54,6 +54,17 @@ Panel {
     root.controller.hide()
   }
 
+  function toggle() {
+    if (root.opened)
+      root.close()
+    else
+      root.open()
+  }
+
+  function closeForPopoutSwitch() {
+    root.close()
+  }
+
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.hostWidget || root, direction)
