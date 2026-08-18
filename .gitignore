@@ -1,0 +1,5 @@
+# Written at runtime; may contain a URL or a fallback token.
+/config.json
+__pycache__/
+*.pyc
+.pytest_cache/

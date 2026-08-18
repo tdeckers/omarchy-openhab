@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "tdeckers.openhab",
+  "name": "OpenHAB",
+  "version": "0.1.0",
+  "author": "tdeckers",
+  "license": "MIT",
+  "description": "Show selected OpenHAB items on the Omarchy bar and in a details panel.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OpenHAB",
+    "description": "First selected item on the bar; click for the rest.",
+    "category": "Home",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 15
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 300,
+        "step": 5,
+        "defaultValue": 15
+      }
+    ]
+  }
+}

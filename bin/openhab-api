@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""OpenHAB REST helper for the tdeckers.openhab Omarchy plugin.
+
+Commands print a single JSON object to stdout. The access token is stored
+in the libsecret keyring when secret-tool is available; otherwise it is
+kept in the local config file (0600).
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PLUGIN_ID = "tdeckers.openhab"
+CONFIG_PATH = os.path.expanduser(f"~/.config/omarchy/{PLUGIN_ID}.json")
+SECRET_ATTRS = ["plugin", PLUGIN_ID]
+MAX_ITEMS = 10
+
+
+def emit(payload: dict) -> None:
+    json.dump(payload, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+def fail(message: str, **extra) -> None:
+    emit({"ok": False, "error": message, **extra})
+    raise SystemExit(0)
+
+
+def load_config() -> dict:
+    data = {"url": "", "items": [], "token": ""}
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return data
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"could not read config: {exc}")
+    if not isinstance(raw, dict):
+        return data
+    data["url"] = str(raw.get("url") or "").strip()
+    items = raw.get("items") if isinstance(raw.get("items"), list) else []
+    cleaned = []
+    seen = set()
+    for item in items:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        cleaned.append(name)
+        if len(cleaned) >= MAX_ITEMS:
+            break
+    data["items"] = cleaned
+    token = raw.get("token")
+    if isinstance(token, str):
+        data["token"] = token.strip()
+    return data
+
+
+def save_config(data: dict) -> None:
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    out = {"url": data.get("url", ""), "items": data.get("items", [])}
+    if data.get("token"):
+        out["token"] = data["token"]
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(out, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, CONFIG_PATH)
+    os.chmod(CONFIG_PATH, 0o600)
+
+
+def secret_lookup() -> str:
+    try:
+        proc = subprocess.run(
+            ["secret-tool", "lookup", *SECRET_ATTRS],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return (proc.stdout or "").strip()
+
+
+def secret_store(token: str) -> bool:
+    try:
+        proc = subprocess.run(
+            [
+                "secret-tool",
+                "store",
+                "--label",
+                "OpenHAB (tdeckers.openhab)",
+                *SECRET_ATTRS,
+            ],
+            input=token,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def get_token(cfg: dict) -> str:
+    return secret_lookup() or str(cfg.get("token") or "")
+
+
+def normalize_url(url: str) -> str:
+    url = url.strip().rstrip("/")
+    if url.endswith("/rest"):
+        url = url[: -len("/rest")]
+    return url.rstrip("/")
+
+
+def normalize_secret(raw: str) -> str:
+    token = raw.strip().strip('"').strip("'")
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
+
+
+def basic_header(userpass: str) -> str:
+    blob = base64.b64encode(userpass.encode("utf-8")).decode("ascii")
+    return f"Basic {blob}"
+
+
+def auth_attempts(token: str) -> list[tuple[str, dict]]:
+    token = normalize_secret(token)
+    attempts: list[tuple[str, dict]] = []
+
+    def add(name: str, headers: dict) -> None:
+        attempts.append((name, headers))
+
+    # username:password pasted into the token field
+    if ":" in token and not token.startswith("oh."):
+        add("basic", {"Authorization": basic_header(token)})
+    # Official API token (Profile → Create API token), starts with oh.
+    add("bearer", {"Authorization": f"Bearer {token}"})
+    add("basic-token", {"Authorization": basic_header(token + ":")})
+    add("x-openhab-token", {"X-OPENHAB-TOKEN": token})
+    return attempts
+
+
+def http_get(url: str, token: str, path: str):
+    target = normalize_url(url) + path
+    last_status = None
+    tried = []
+    for name, extra in auth_attempts(token):
+        headers = {"Accept": "application/json"}
+        headers.update(extra)
+        req = urllib.request.Request(target, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+                return json.loads(body)
+        except urllib.error.HTTPError as exc:
+            last_status = exc.code
+            tried.append(name)
+            if exc.code != 401:
+                fail(f"HTTP {exc.code} from OpenHAB", status=exc.code)
+            continue
+        except urllib.error.URLError as exc:
+            fail(f"could not reach OpenHAB: {exc.reason}")
+        except TimeoutError:
+            fail("OpenHAB request timed out")
+        except json.JSONDecodeError:
+            fail("OpenHAB returned invalid JSON")
+    fail(
+        "HTTP 401 from OpenHAB — credentials rejected. "
+        "Use username:password (Basic auth enabled on the server) "
+        "or an API token from Profile → Security (starts with oh.).",
+        status=last_status,
+        tried=tried,
+    )
+
+
+def compact_item(raw: dict) -> dict:
+    name = str(raw.get("name") or "")
+    label = str(raw.get("label") or name)
+    return {
+        "name": name,
+        "label": label,
+        "type": str(raw.get("type") or ""),
+        "state": str(raw.get("state") or ""),
+    }
+
+
+def cmd_config_get() -> None:
+    cfg = load_config()
+    emit(
+        {
+            "ok": True,
+            "url": cfg["url"],
+            "items": cfg["items"],
+            "hasToken": bool(get_token(cfg)),
+            "tokenInKeyring": bool(secret_lookup()),
+        }
+    )
+
+
+def cmd_config_set() -> None:
+    payload = json.loads(sys.stdin.read() or "{}")
+    if not isinstance(payload, dict):
+        fail("config payload must be an object")
+    cfg = load_config()
+    if "url" in payload:
+        cfg["url"] = normalize_url(str(payload.get("url") or ""))
+    if "items" in payload:
+        if not isinstance(payload["items"], list):
+            fail("items must be an array of names")
+        names = []
+        seen = set()
+        for item in payload["items"]:
+            name = str(item or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+            if len(names) >= MAX_ITEMS:
+                break
+        cfg["items"] = names
+    token = payload.get("token")
+    if isinstance(token, str) and token.strip():
+        token = token.strip()
+        if secret_store(token):
+            cfg["token"] = ""
+        else:
+            cfg["token"] = token
+    save_config(cfg)
+    cmd_config_get()
+
+
+def cmd_items() -> None:
+    cfg = load_config()
+    if not cfg["url"]:
+        fail("set the OpenHAB URL first")
+    token = get_token(cfg)
+    if not token:
+        fail("set the OpenHAB token first")
+    raw = http_get(cfg["url"], token, "/rest/items")
+    if not isinstance(raw, list):
+        fail("unexpected /rest/items payload")
+    items = [compact_item(row) for row in raw if isinstance(row, dict) and row.get("name")]
+    items.sort(key=lambda row: (row["label"] or row["name"]).lower())
+    emit({"ok": True, "items": items, "count": len(items)})
+
+
+def cmd_states() -> None:
+    cfg = load_config()
+    if not cfg["url"]:
+        fail("set the OpenHAB URL first")
+    token = get_token(cfg)
+    if not token:
+        fail("set the OpenHAB token first")
+    if not cfg["items"]:
+        emit({"ok": True, "items": []})
+        return
+    selected = []
+    for name in cfg["items"]:
+        encoded = "/" + urllib.parse.quote(name, safe="")
+        raw = http_get(cfg["url"], token, "/rest/items" + encoded)
+        if isinstance(raw, dict):
+            selected.append(compact_item(raw))
+        else:
+            selected.append({"name": name, "label": name, "type": "", "state": "?"})
+    emit({"ok": True, "items": selected})
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
+        fail("usage: openhab-api config-get|config-set|items|states")
+    cmd = sys.argv[1]
+    if cmd == "config-get":
+        cmd_config_get()
+    elif cmd == "config-set":
+        cmd_config_set()
+    elif cmd == "items":
+        cmd_items()
+    elif cmd == "states":
+        cmd_states()
+    else:
+        fail(f"unknown command: {cmd}")
+
+
+if __name__ == "__main__":
+    main()
